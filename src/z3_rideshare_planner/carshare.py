@@ -1,11 +1,9 @@
 import googlemaps
 import pandas as pd
-import sys
 from z3 import *
 from datetime import datetime
-import googlemaps
-import gmaps
-import gmaps.datasets
+# import gmaps
+# import gmaps.datasets
 import folium
 import polyline as pl
 import numpy as np
@@ -14,7 +12,7 @@ import matplotlib.pyplot as plt
 
 # Main #
 
-def main(passenger_name_addr, driver_name_addr, destination_, n_seats, API_KEY):
+def setup(passenger_name_addr, driver_name_addr, destination_, API_KEY):
     global KEY, passengers, drivers, destination, n_p, n_d, passenger_addresses, driver_addresses
     global distances, passenger_df, driver_df, people_df, t_list, T_list, N_list, gmaps_client, now
     
@@ -36,17 +34,6 @@ def main(passenger_name_addr, driver_name_addr, destination_, n_seats, API_KEY):
     t_list = [Bool('t_%s' % i) for i in range(n_d * (n_p + 1) ** 2)]
     T_list = [Int('T_%s' % i) for i in range(n_d * (n_p + 1))]
     N_list = [Int('N_%s' % i) for i in range(n_d * (n_p + 1))]
-
-    # Generate plan
-    model = search_opt(n_seats)
-    print_plan(*parse_plan(model))
-
-    # Save plan to html
-    gmaps.configure(api_key=KEY)  # Fill in with your API key
-    gmaps_client = googlemaps.Client(key=KEY)  # Fill in with your API key
-    now = datetime.now()
-    figure = draw_plan(model)
-    figure.save('map.html')
 
     
 
@@ -70,7 +57,7 @@ def get_distance_matrix(origins, destinations, API_KEY):
                 distances.loc[(origins[row_idx], destinations[col_idx]), 'duration'] = element['duration']['value']
             else:
                 print(f'DISTANCE NOT FOUND: {origins[row_idx]} - {destinations[col_idx]}')
-                sys.exit()
+                # sys.exit()
             col_idx += 1
         row_idx += 1
     return distances
@@ -211,54 +198,55 @@ def passengerGuarantee(passenger):
                 disjunctives.append(D(driver, prevPassenger, passenger))
     return Or(*tuple(disjunctives))
 
-def generate_plan(cost, n_seats, ignore_cost=False):
-    s = Solver()
-
-    if isinstance(n_seats, int) or isinstance(n_seats, float):
-        if n_seats * n_d < n_d + n_p:
-            print('Error: Seats insufficient')
-            return (False, None)
-        for driver in range(n_d):
-            s.add(driverGuarantee(driver, n_seats))
-    elif (isinstance(n_seats, tuple) or isinstance(n_seats, list)) and len(n_seats) == n_d:
-        if sum(n_seats) * n_d < n_d + n_p:
-            print('Error: Seats insufficient')
-            return (False, None)
-        for driver, n in enumerate(n_seats):
-            s.add(driverGuarantee(driver, n))
-    else:
-        print('Error: n_seats format wrong')
-        return (False, None)
-        
-    for passenger in range(n_p):
-        s.add(passengerGuarantee(passenger))
-        
-    if s.check() == sat:
-        if ignore_cost:
-            # print('SUCCESS: Found one plan ignoring the cost')
-            return (True, s.model())
-    else:
-        print('Not Satisfied')
-        return (False, None)
-    s.add(cost_limit(cost))
-    if s.check() == sat:
-        # print('SUCCESS')
-        return (True, s.model())
-    else:
-        # print('No plan under the cost')
-        return (False, None)
     
 #---------------------#
     
 # Find and parse optimal solution #
 
 def search_opt(n_seats):
+    def generate_plan(cost, n_seats, ignore_cost=False):
+        s = Solver()
+
+        if isinstance(n_seats, int) or isinstance(n_seats, float):
+            if n_seats * n_d < n_d + n_p:
+                raise ValueError('Error: Seats insufficient')
+                # return (False, None)
+            for driver in range(n_d):
+                s.add(driverGuarantee(driver, n_seats))
+        elif (isinstance(n_seats, tuple) or isinstance(n_seats, list)) and len(n_seats) == n_d:
+            if sum(n_seats) * n_d < n_d + n_p:
+                raise ValueError('Error: Seats insufficient')
+                # return (False, None)
+            for driver, n in enumerate(n_seats):
+                s.add(driverGuarantee(driver, n))
+        else:
+            raise ValueError('Error: n_seats format wrong')
+            # return (False, None)
+            
+        for passenger in range(n_p):
+            s.add(passengerGuarantee(passenger))
+            
+        if s.check() == sat:
+            if ignore_cost:
+                # print('SUCCESS: Found one plan ignoring the cost')
+                return (True, s.model())
+        else:
+            # print('Not Satisfied')
+            return (False, None)
+        s.add(cost_limit(cost))
+        if s.check() == sat:
+            # print('SUCCESS')
+            return (True, s.model())
+        else:
+            # print('No plan under the cost')
+            return (False, None)
+        
     attempt = generate_plan(0, n_seats, True)
     if attempt[0]:
         model = attempt[1]
         time = max([model.eval(T(i, n_p)).as_long() for i in range(n_d)])
     else:
-        return None
+        raise ValueError('Error: No plan found')
     while time > 0:
         attempt = generate_plan(time - 1, n_seats)
         if not attempt[0]:
@@ -308,49 +296,49 @@ def print_plan(paths, max_time):
 
 # Visualization functions #
 
-def draw_path(map, path, driver, color):
-    def draw_section(start, end):
-        polyline = gmaps_client.directions(start, end, mode="driving", departure_time=now)[0]['overview_polyline']['points']
-        points = pl.decode(polyline)
-        folium.PolyLine(points, color= f"#{color[0]:02x}{color[1]:02x}{color[2]:02x}", weight=4, opacity=1).add_to(map)
+def draw_plan(paths, gmaps_client, colormap='Set1', output_mode='display'):
+    def draw_path(map, path, driver, color):
+        def draw_section(start, end):
+            polyline = gmaps_client.directions(start, end, mode="driving", departure_time=datetime.now())[0]['overview_polyline']['points']
+            points = pl.decode(polyline)
+            folium.PolyLine(points, color= f"#{color[0]:02x}{color[1]:02x}{color[2]:02x}", weight=4, opacity=1).add_to(map)
+            return
+    
+        driver_location = get_lat_lon(driver_df['address'].iloc[driver])
+        draw_section(driver_location, get_lat_lon(people_df['address'].iloc[path[0]]))
+        add_marker(map, driver_location, 0, driver_df['person'].iloc[driver] + ' (driver)', color)
+        for i in range(len(path)):
+            start = get_lat_lon(people_df['address'].iloc[path[i]])
+            if i == len(path) - 1:
+                end = get_lat_lon(destination)
+            else:
+                end = get_lat_lon(people_df['address'].iloc[path[i + 1]])
+            draw_section(start, end)
+            add_marker(map, start, i + 1, people_df['person'].iloc[path[i]], color)
+
+        return
+
+    def add_marker(map, location, index, label, color):
+        icon_html = lambda d: f'''
+            <div style="background-color: rgb({color[0]},{color[1]},{color[2]}); border-radius: 50%; 
+                width: 30px; height: 30px; text-align: center; line-height: 30px; 
+                color: {'gray' if index == 0 else 'white'}; font-size: 14pt;">
+                {d}
+            </div>
+        '''
+        folium.Marker(location=location,
+                popup=folium.Popup(label, max_width=70),
+                icon=folium.DivIcon(html=icon_html(index))).add_to(map)
         return
     
-    driver_location = get_lat_lon(driver_df['address'].iloc[driver])
-    draw_section(driver_location, get_lat_lon(people_df['address'].iloc[path[0]]))
-    add_marker(map, driver_location, 0, driver_df['person'].iloc[driver] + ' (driver)', color)
-    for i in range(len(path)):
-        start = get_lat_lon(people_df['address'].iloc[path[i]])
-        if i == len(path) - 1:
-            end = get_lat_lon(destination)
-        else:
-            end = get_lat_lon(people_df['address'].iloc[path[i + 1]])
-        draw_section(start, end)
-        add_marker(map, start, i + 1, people_df['person'].iloc[path[i]], color)
+    def get_lat_lon(address):
+        result = gmaps_client.geocode(address)
+        if len(result) == 0:
+            print(f'Error: Address {address} not found')
+            return
+        loc = result[0]['geometry']['location']
+        return (loc['lat'], loc['lng'])
 
-    return
-
-def add_marker(map, location, index, label, color):
-    icon_html = lambda d: f'''
-        <div style="background-color: rgb({color[0]},{color[1]},{color[2]}); border-radius: 50%; 
-            width: 30px; height: 30px; text-align: center; line-height: 30px; 
-            color: {'gray' if index == 0 else 'white'}; font-size: 14pt;">
-            {d}
-        </div>
-    '''
-    folium.Marker(location=location,
-            popup=folium.Popup(label, max_width=70),
-            icon=folium.DivIcon(html=icon_html(index))).add_to(map)
-    return
-    
-def get_lat_lon(address):
-    result = gmaps_client.geocode(address)
-    if len(result) == 0:
-        print(f'Error: Address {address} not found')
-        return
-    loc = result[0]['geometry']['location']
-    return (loc['lat'], loc['lng'])
-
-def draw_plan(model, colormap='Set1'):
     # Initialize the map
     all_addrs = passenger_addresses + driver_addresses + [destination]
     all_addrs = np.array([get_lat_lon(addr) for addr in all_addrs])
@@ -360,12 +348,15 @@ def draw_plan(model, colormap='Set1'):
     northeast += difference * 0.2
     bounds = [southwest.tolist(), northeast.tolist()]
     figure = folium.Figure(width=1000, height=500)
-    map = folium.Map(location=all_addrs.mean(axis=0), zoom_start=12, min_zoom = 11, max_bounds=True,
-                     min_lat=bounds[0][0], max_lat=bounds[1][0], min_lon=bounds[0][1], 
-                     max_lon=bounds[1][1]).add_to(figure)
+    if output_mode == 'display':
+        map = folium.Map(location=all_addrs.mean(axis=0), zoom_start=12, min_zoom = 11, max_bounds=True,
+                         min_lat=bounds[0][0], max_lat=bounds[1][0], min_lon=bounds[0][1], 
+                         max_lon=bounds[1][1]).add_to(figure)
+    else:
+        map = folium.Map(location=all_addrs.mean(axis=0), tiles='Stadia.OSMBright', zoom_start=12, min_zoom = 11, max_bounds=True,
+                        min_lat=bounds[0][0], max_lat=bounds[1][0], min_lon=bounds[0][1], 
+                        max_lon=bounds[1][1]).add_to(figure)
     
-    
-    paths, max_time = parse_plan(model)
     paths = [path[:-1] for path in paths] # Remove destination from all paths
 
     # Figure the colors
@@ -379,38 +370,7 @@ def draw_plan(model, colormap='Set1'):
     for i in range(len(paths)):
         draw_path(map, paths[i], i, colors[i]) # Draw path for driver i
     add_marker(map, get_lat_lon(destination), 'D', destination, colors[-1])
-    # print(f'Time bound: {max_time}')
     return figure
 
 
-
-
-KEY = 'AIzaSyDt76ZoGVu1Dtd2UMQ7Hwd8RktdlWbHN2o'
-passengers = [
-    ('A1', '8775 Costa Verde Blvd, San Diego, CA'),
-    ('B1', '8800 Lombard Pl, San Diego, CA'),
-    ('C1', '9600 Campus Point Dr, La Jolla, CA'),
-    ('D1', '7655 Palmilla Dr, San Diego, CA'),
-    ('E1', '8636 Villa La Jolla Dr, La Jolla, CA'),
-    ('F1', '7867 Camino Aguila, San Diego, CA'),
-    ('G1', '10374 Wateridge Cir, San Diego, CA'),
-]
-
-drivers = [
-    ('A2', '9500 Gilman Dr, La Jolla, CA'),
-    ('B2', '9515 Genesee Ave, San Diego, CA'),
-    ('C2', '1415 Orion Dr, San Diego, CA')
-]
-
-destination = '3435 Del Mar Heights Rd, San Diego, CA'
-
-n_p = len(passengers)
-n_d = len(drivers)
-passenger_addresses = [p[1] for p in passengers]
-driver_addresses = [d[1] for d in drivers]
-distances = construct_distance_matrix(passenger_addresses + driver_addresses + [destination], KEY)
-
-passenger_df = pd.DataFrame(passengers, columns=['person', 'address'])
-driver_df = pd.DataFrame(drivers, columns=['person', 'address'])
-people_df = pd.concat([passenger_df, driver_df]).reset_index().drop(columns=['index'])
 
